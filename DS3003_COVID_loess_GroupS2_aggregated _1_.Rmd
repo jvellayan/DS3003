@@ -1,0 +1,280 @@
+---
+title: "COVID-19: Data Analysis (Loess Disagreement)"
+author: "Cecily Wolfe, Jaya Vellayan, Libby Browder, Neil Singh" 
+date: "02/24/2020"
+output:
+     html_document:
+          toc: TRUE
+          toc_depth: 4
+          toc_float: true
+          toc_collapsed: true
+          theme: journal
+          code_folding: show
+---
+
+<!--- Change font size for headers --->
+<style>
+h1.title {
+  font-size: 30px;
+}
+h1 {
+  font-size: 26px;
+}
+h2 {
+  font-size: 22px;
+}
+h3 { 
+  font-size: 18px;
+}
+
+</style>
+
+
+
+```{r setup, message= FALSE}
+#sets knitting options
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      fig.align = "center",
+                      out.width = "80%")
+#import libs for ggplot/gridExtra
+#install.packages("gridExtra")
+if(!require(gridExtra)) 
+  {
+    install.packages("gridExtra")
+  }
+
+if(!require(ggforce)) 
+  {
+    install.packages("ggforce")
+  }
+
+library(gridExtra)
+library(tidyverse)
+library(ggforce)
+#sets the path variables for files 
+icl_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/daily-new-estimated-covid-19-infections-icl-model.csv'
+ihme_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/daily-new-estimated-covid-19-infections-ihme-model.csv'
+yyg_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/daily-new-estimated-covid-19-infections-yyg-model.csv'
+
+```
+
+
+
+
+
+# Data Cleaning Wrapper Function
+
+This function takes in seven arguments: first three being the file paths, the respective model names, followed by a country to perform analysis on. We recieve three columns of data that are then passed to our visualization functions.
+
+```{r}
+data_clean <- function(m1_fp,m2_fp,m3_fp,m1_name,m2_name,m3_name,focus) 
+{
+
+    #reads data in from the memory for each model---renaming with the user input name
+    #we make a guess amount of rows VERY high b/c for some datasets many first rows are missing!
+    m1_estimated_infections_totals <- read_csv(m1_fp, guess_max = 100000) %>%
+  dplyr::select(-`Daily new confirmed cases due to COVID-19 (rolling 7-day average, right-aligned)`) %>%
+  drop_na() %>%
+  rename(Country=Entity) %>%
+  rename(m1_upper="Daily new estimated infections of COVID-19 (MODEL_NAME, upper)" %>% str_replace("MODEL_NAME",m1_name)) %>%
+  rename(m1_lower="Daily new estimated infections of COVID-19 (MODEL_NAME, lower)" %>% str_replace("MODEL_NAME",m1_name)) %>%
+  rename(m1_mean="Daily new estimated infections of COVID-19 (MODEL_NAME, mean)" %>% str_replace("MODEL_NAME",m1_name))
+
+    m2_estimated_infections_totals <- read_csv(m2_fp, guess_max = 100000) %>%
+  dplyr::select(-`Daily new confirmed cases due to COVID-19 (rolling 7-day average, right-aligned)`) %>%
+  drop_na() %>%
+  rename(Country=Entity) %>%
+  rename(m2_upper="Daily new estimated infections of COVID-19 (MODEL_NAME, upper)" %>% str_replace("MODEL_NAME",m2_name)) %>%
+  rename(m2_lower="Daily new estimated infections of COVID-19 (MODEL_NAME, lower)" %>% str_replace("MODEL_NAME",m2_name)) %>%
+  rename(m2_mean="Daily new estimated infections of COVID-19 (MODEL_NAME, mean)" %>% str_replace("MODEL_NAME",m2_name))
+
+    m3_estimated_infections_totals <- read_csv(m3_fp, guess_max = 100000) %>%
+  dplyr::select(-`Daily new confirmed cases due to COVID-19 (rolling 7-day average, right-aligned)`) %>%
+  drop_na() %>%
+  rename(Country=Entity) %>%
+  rename(m3_upper="Daily new estimated infections of COVID-19 (MODEL_NAME, upper)" %>% str_replace("MODEL_NAME",m3_name)) %>%
+  rename(m3_lower="Daily new estimated infections of COVID-19 (MODEL_NAME, lower)" %>% str_replace("MODEL_NAME",m3_name)) %>%
+  rename(m3_mean="Daily new estimated infections of COVID-19 (MODEL_NAME, mean)" %>% str_replace("MODEL_NAME",m3_name))
+    
+    #inner join, and clean the data for aggregation 
+    models_estimated_infections_totals <- m1_estimated_infections_totals %>% 
+  inner_join(m2_estimated_infections_totals) %>% inner_join(m3_estimated_infections_totals) %>%
+  filter(m1_mean != 0 & m2_mean != 0 & m3_mean != 0) %>%
+  rowwise() %>% mutate(m1_possible = runif(1,m1_lower,m1_upper)) %>%
+  rowwise() %>% mutate(m2_possible = runif(1,m2_lower,m2_upper)) %>%
+  rowwise() %>% mutate(m3_possible = runif(1,m3_lower,m3_upper))    
+  
+    #pipe the data into a filter for one country, logging each model   
+    clean_data <- models_estimated_infections_totals %>% filter(Country %in% focus) %>%
+    mutate(log_m1_possible=log(m1_possible),
+         log_m2_possible=log(m2_possible),
+         log_m3_possible=log(m3_possible))  
+    
+    #subset for the logged possiblities
+    clean_data <- clean_data[,c('log_m1_possible','log_m2_possible','log_m3_possible')]
+    
+  return (clean_data)
+    
+}
+
+```
+
+# Pairwise Disagreements: Three Models, One Country
+
+This takes three countries followed by a clean data frame, to perform the pairwise "disagreement plotting."
+This returns a plot object handle.
+
+```{r}
+disagreements <- function(m1_name,m2_name,m3_name,clean_data)
+{
+      #create each of the individual plot objects, piping in data 
+      #we use str_replace as a tool for custom and flexible titles
+    m2_v_m1 <-  ggplot(data = clean_data, mapping=aes(x=log_m1_possible,y=log_m2_possible)) + geom_point() +
+  geom_abline(intercept=0, slope=1, color='red') + geom_smooth(method='loess') + labs(x=m1_name,y=m2_name,title = "M2 vs. M1" %>% str_replace("M2", m2_name) %>% str_replace("M1",m1_name))
+    m3_v_m1 <-  ggplot(data = clean_data, mapping=aes(x=log_m1_possible,y=log_m3_possible)) + geom_point() +
+  geom_abline(intercept=0, slope=1, color='red') + geom_smooth(method='loess') + labs(x=m1_name,y=m3_name,title = "M3 vs. M1" %>% str_replace("M3", m3_name) %>% str_replace("M1",m1_name))
+    m3_v_m2 <-  ggplot(data = clean_data, mapping=aes(x=log_m2_possible,y=log_m3_possible)) + geom_point() +
+  geom_abline(intercept=0, slope=1, color='red') + geom_smooth(method='loess') + labs(x=m2_name,y=m3_name,title = "M3 vs. M2" %>% str_replace("M3", m3_name) %>% str_replace("M2",m2_name))
+    
+    #unite them into one plot area with the gridExtra import
+    loess_chart <- gridExtra::grid.arrange(m2_v_m1, m3_v_m1, m3_v_m2, nrow=2)
+  return(loess_chart)
+  
+}
+```
+
+
+# Square Loess Matrix: Three Models, One Country
+
+This takes three countries followed by a data frame, to perform the pairwise "disagreement plotting." 
+This returns a plot object handle.
+
+```{r}
+prediction_fm <- function(m1_name,m2_name,m3_name,clean_data)
+{
+      
+  #rename for user friendly
+  names(clean_data) <- c(paste('Logged',m1_name), 
+                           paste('Logged', m2_name), 
+                           paste('Logged', m3_name))
+  
+  #initialize the ggplot handle
+  three_square <- ggplot(clean_data, aes(x = .panel_x, y = .panel_y)) + 
+  #add points and density handles
+  geom_point(alpha = 0.2, shape = 16, size = 0.5) + 
+  geom_autodensity() +
+  geom_density2d() +
+  #bunch into matrix
+  facet_matrix(vars(everything()), layer.diag = 2, layer.upper = 3, 
+               grid.y.diag = FALSE)
+    
+
+  return(three_square)
+  
+}
+```
+# Section 1: Iceland and Canada
+
+We opted to look into the assessment of both Canada and Iceland. This was done as these are two Northern Hemisphere countries not yet covered in prior work. Northern Hemisphere countries face a particular challenge of a cold climate, which permits coronavirus an added layer of protection, making it difficult to decrease case counts. 
+
+Some observations from this assessment include:
+
+1. For the "disagreement" plots for Iceland, we see the slope of the Loess function to be much less steep than the objective function of y = x. Note, we plot the objective y = x, considering the desire to minimize disagreements across the different models. An interesting observation is the few negative values in these plots. Their role in influencing the Loess fitting serves as a topic for future work. 
+
+2. We see an even distribution in the horizontal axis for the Iceland "disagreement" pair wise distrubtions, which has contrast to the Mexico plots in Section 3.
+
+3. An interesting research question lies in the convexity of the Loess function, and what interpretation the symbolizes in the context of model disagreement. If a Loess curve is less convex, does that mean greater disagreement, or does that mean we need a better numerical method for creating the curves?
+
+4. For the facet matrix in Canada, we see a strong skew left of the observations. This represents a tendancy for case estimates to be above the mean (assuming an underlying normal distribution). The contour styled plots permit a us to see a strong congregation of values in the center for the IHME model.
+
+
+5. We witness that the disagreement in the Iceland case is among the strongest in our data analysis, as there is a strong lack of adhearence between the Loess function and linear fits for all pairwise analyses.
+
+6. The asymmetry of bell curves in the "all-at-once" approach for Canada may also be symbolic of disagreement, however the bottom left dotplots look very promising in terms of fitting the function y = x.
+
+```{r}
+
+ns_data <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Iceland")) 
+ns_data2 <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Canada")) 
+disagreements("ICL","IHME","YYG",ns_data)
+prediction_fm("ICL","IHME","YYG",ns_data2)
+
+```
+
+
+# Section 2: Mexico and Spain
+
+We chose to look at Spain and Mexico because they share some similarities but are still very different. For instance, they are both Spanish speaking and rely on tourism, but Spain is considered a richer country. Additionally, we had not yet looked into these two countries, so we wanted to get exposure to as many countries as possible. 
+
+Some observations:
+
+1.	The disagreement plots were run on Spain’s data. For all of the disagreement plots produced, the disagreement function is relatively close to y = x, so the different models seem to agree more than they disagree. The slope is definitely not exactly y = x, but it is surprisingly close. Specifically, when comparing the YYG model and the IHME model, there is a lot of overlap between the disagreement function and y = x.
+
+2.	Additionally, the disagreement function is very linear in nature, whereas some of the plots produced by my team members have more curve to them.
+
+3.	Hence, the models seem to be pretty agreeable for Spain because the seemingly linear function is very close to y = x.
+
+4.	For the matrix, run on Mexico’s data, we see much more spread-out plots. The data was definitely more concentrated for the previous plots on Spain’s data than it appears to be for the matrix.
+
+5.	The plots in the matrix are not particularly skewed to one direction or the other, the data is mostly concentrated in the center, but the distribution definitely is not normal either.
+
+6.	The YYG model is the most skewed model (to the left), hence estimates are more commonly on the higher end for the YYG model
+
+
+
+```{r}
+jv_data <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Mexico")) 
+jv_data2 <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Spain")) 
+disagreements("ICL","IHME","YYG",jv_data)
+prediction_fm("ICL","IHME","YYG",jv_data2)
+```
+
+
+# Section 3: Brazil and Chile
+
+1. For YYG and IHME: considering that IHME and YYG both displayed a fair amount of divergence from ICL, it is reassuring that the two report some degree of similarity. 
+
+2. Though the blue curve again slightly resembles the logistic growth curve, the red line of best fit tracks much more closely with it, and therefore the raw data points, even at lower values. 
+
+3. As such, though both the IHME and YYG models disagree relatively substantially with the ICL model, the two in fact coincide with one other reasonably well.
+
+
+```{r}
+cw_data <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Brazil")) 
+cw_data2 <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Chile")) 
+disagreements("ICL","IHME","YYG",cw_data)
+prediction_fm("ICL","IHME","YYG",cw_data2)
+
+```
+
+# Section 4: Germany and Switzerland
+
+
+We chose to look at Germany and Switzerland, two European countries that share a border. 
+
+1. Looking at the Loess plots comparing COVID-19 data reports from different sources, we can see that there is a lot of disagreement among models. When comparing the YYG and IHME, these prediction models seem the most similar, though there is still some discrepancy between them. 
+
+2. We can see that the blue curve fits closer with the y = x line compared to the other plots.  In contrast, the YYG and ICL models appear to have the most discrepancy with the S shaped curve that does fit as close with y = x.
+
+
+```{r}
+lb_data <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG","Germany") 
+lb_data2 <- data_clean(icl_gfp,ihme_gfp,yyg_gfp,"ICL","IHME","YYG",c("Switzerland")) 
+disagreements("ICL","IHME","YYG",lb_data)
+prediction_fm("ICL","IHME","YYG",lb_data2)
+```
+
+# References
+
+## One Offs
+1. (Grid Extra) [http://www.sthda.com/english/articles/24-ggpubr-publication-ready-plots/81-ggplot2-easy-way-to-mix-multiple-graphs-on-the-same-page/]
+2. (Debugging Problems) [https://readr.tidyverse.org/reference/problems.html]
+3. (readR for Guesses) [https://readr.tidyverse.org/articles/readr.html]
+4. (Rename Tibble Columns) [https://dplyr.tidyverse.org/reference/rename.html]
+5. (String Concatenation) [https://www.math.ucla.edu/~anderson/rw1001/library/base/html/paste.html]
+6. (facet_matrix) [https://www.data-imaginist.com/2019/a-flurry-of-facets/]
+7. (Logistic Function) [https://en.wikipedia.org/wiki/Logistic_function#In_ecology:_modeling_population_growth]
+
+## Data and Associated References
+1. (OWID) [https://ourworldindata.org/covid-models]
+

@@ -1,0 +1,318 @@
+---
+title: "COVID-19: Data Analysis"
+author: "Cecily Wolfe, Jaya Vellayan, Libby Browder, Neil Singh" 
+date: "02/24/2020"
+output:
+     html_document:
+          toc: TRUE
+          toc_depth: 4
+          toc_float: true
+          toc_collapsed: true
+          theme: journal
+          code_folding: show
+---
+
+<!--- Change font size for headers --->
+<style>
+h1.title {
+  font-size: 30px;
+}
+h1 {
+  font-size: 26px;
+}
+h2 {
+  font-size: 22px;
+}
+h3 { 
+  font-size: 18px;
+}
+
+</style>
+
+
+
+
+```{r setup,message=FALSE}
+#sets knitting options
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE, 
+                      fig.align = "center",
+                      out.width = "80%")
+#import libs for ggplot
+library(tidyverse)
+#sets wd
+setwd("~/DS_Course/covid")
+#sets the path variables for files 
+who_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/WHO-COVID-19-global-data.csv'
+icl_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/daily-new-estimated-covid-19-infections-icl-model.csv'
+pop_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/API_SP.POP.TOTL_DS2_en_csv_v2_2077948.csv'
+ihme_gfp <- 'C:/Users/ns9wr/Documents/DS_Course/covid/daily-new-estimated-covid-19-infections-ihme-model.csv'
+```
+
+
+
+
+# WHO Data Wrapper Function
+
+This function takes in two arguments: the global path of the CSV file (global_fpath), and the countries in interest (focus).
+
+```{r}
+WHO_generator <- function(WHO_file, focus) 
+{
+
+    #reads data in from the memory
+    covids <-  read_csv(WHO_file) %>%
+      filter(Date_reported=='2020-11-01') %>% 
+      filter(Country %in% focus) 
+    
+    #adds the desired derived metrics 
+    covids <- covids %>% mutate(rate = Cumulative_deaths/Cumulative_cases,
+                                SE = sqrt(rate*(1-rate)/Cumulative_cases)) 
+    
+    
+    #creates the initial bar chart, piping in data to ggplot
+    bchart <-  covids %>%
+        ggplot(mapping=aes(x=rate, y=Country)) + geom_col() +
+      xlab('WHO: # Reported Deaths / # Reported Cases')  
+    
+    #add the error bars
+    bchart <- bchart + geom_errorbar(aes(xmin=rate-2*SE, xmax=rate+2*SE),  width=.2) 
+
+    #add the facet grid
+    bchart <- bchart + facet_wrap(~ WHO_region, nrow=2, scale="free")
+    
+    return(bchart)
+    
+}
+
+```
+# IHME/ICL Wrapper 
+
+This function takes in two arguments: the three global paths of the CSV files (args[0]-args[2]: WHO_file, pop_file, IHME_file/ICL_file), model name (as character vector), and the countries in interest (focus).
+
+```{r}
+ICL_IHME_Wrapper <- function(WHO_file, pop_file,model_file, model_name, focus) 
+{
+
+    #reads covids data in from the memory
+    covids <-  read_csv(WHO_file) %>%
+      filter(Date_reported=='2020-11-01') %>% 
+      filter(Country %in% focus) 
+    
+  #read population data from memory
+    pop <- read_csv(pop_file, skip=4) %>% 
+  dplyr::select("Country Name",`2019`) %>%
+  rename(Country=`Country Name`, `2019_pop`=`2019`) %>%
+  #modification to facilitate join
+  mutate(Country = Country %>% 
+                   str_replace("Korea, Rep.","Republic of Korea")) %>%
+  mutate(Country = Country %>% 
+                   str_replace("United States", "United States of America")) %>%
+  mutate(Country = Country %>% 
+                   str_replace("Vietnam", "Viet Nam")) 
+
+    
+  #assemble data from ICL estimates
+    estimated_infections_totals <- read_csv(model_file) %>%
+  dplyr::select(-Code, -Date) %>% replace(is.na(.), 0) %>%
+  rename(Country=Entity) %>%
+  group_by(Country) %>% summarize_all(sum) %>%
+  #modification to facilitate join 
+  mutate(Country = Country %>% 
+                   str_replace("South Korea","Republic of Korea")) %>%
+  mutate(Country = Country %>% 
+                   str_replace("United States", "United States of America")) %>%
+  mutate(Country = Country %>% 
+                   str_replace("Vietnam", "Viet Nam")) 
+    
+  #make variable strings connect to model  
+  upper_str <- "Daily new estimated infections of COVID-19 (MODEL_NAME, upper)" %>% str_replace("MODEL_NAME",model_name)
+  
+  lower_str <- "Daily new estimated infections of COVID-19 (MODEL_NAME, lower)" %>% str_replace("MODEL_NAME",model_name)
+  mean_str <- "Daily new estimated infections of COVID-19 (MODEL_NAME, mean)" %>% str_replace("MODEL_NAME",model_name)
+  
+  #performs our joins 
+  estimated_infections_totals_focus <- estimated_infections_totals %>% 
+  # `right_join`: "left"=estimated_infections_totals, right="covids"
+  # join on shared column names (here "Country") on the basis of the "right" df
+  right_join(covids) %>% 
+  # `left_join`: "left"="everything so far", "right"=pop
+  # join on shared column names (here "Country") on the basis of the "left" df
+  left_join(pop) %>%
+  rename(upper_bound=upper_str) %>%
+  rename(lower_bound=lower_str) %>%
+  rename(mean_estimate=mean_str) 
+    
+  #adds bar calculations
+  final_chart_data <- estimated_infections_totals_focus %>% 
+  mutate(upper_per1k = 1000*upper_bound/`2019_pop`) %>%
+  mutate(lower_per1k = 1000*lower_bound/`2019_pop`) %>%
+  mutate(mean_per1k = 1000*mean_estimate/`2019_pop`)
+  
+  
+  #final chart assembly, layer by layer, start with a aes and column, proceeding with errorbars, labels, and wrap
+  final_chart <- final_chart_data %>% ggplot(mapping=aes(x=mean_per1k, y=Country)) + geom_col() + geom_errorbar(aes(xmin=mean_per1k-lower_per1k, 
+  xmax=mean_per1k+upper_per1k), width=.2) + xlab('MODEL_NAME estimate/uncertanty: number of infections per 1000 people' %>% str_replace("MODEL_NAME",model_name)) + facet_wrap(~ WHO_region, nrow=2, scale="free") 
+  
+  return(final_chart)
+  
+}
+```
+
+
+# Section 1
+
+The motivation behind these countries selection was to attempt for a low level of redundancy in our representations. This was done through a coordination of subset selection with our team.
+
+Some items for us to note in the observation of these boxplots are:
+
+1. Each horizontal axis has different scalings for this subset of countries. We opted to not coerce consistent axes or log the horizontal axis. This was done to ease interpretations among analysts.
+
+2. To interpret the best performance in our subset, we witness that: AFRO, SEARO, and WPRO countries were experiencing the least amount of cases, through a cursory search of the horizontal axes, based on ICL estimates.
+
+3. Another observation is that the country with the greatest uncertainty is either Hungary or Georgia. This is seen as the whiskers on the plot have the highest length magnitude in the subset. Georgia has greatest uncertainty for the IHME estimates, and Hungary for the ICL.
+
+4. Boxes/Whiskers with small heights mean that we have a strong degree of confidence in the estimates made. For examples of these, see the subplots for: Thailand, Bhutan, Viet Nam, and Solomon Islands for the ICL computation. 
+
+
+```{r}
+#foci by WHO region
+afro_foci <- c('Ghana', 'Guinea-Bissau','Kenya','Liberia','Madagascar')
+amro_foci <- c('Guatemala', 'Guyana','Haiti','Honduras','Jamaica')
+emro_foci <- c('Afghanistan','Bahrain','Sudan','Tunisia','United Arab Emirates')
+euro_foci <- c('Georgia','Germany','Greece','Hungary','Iceland')
+searo_foci <- c('Bangladesh','Bhutan','Maldives','Myanmar','Thailand')
+wpro_foci <- c('Australia','Republic of Korea','Singapore','Solomon Islands','Viet Nam')
+
+#concatenate all foci together---easier debugging
+foci_countries <- c(afro_foci,amro_foci,euro_foci,emro_foci,searo_foci,wpro_foci)
+
+#call each of the functions with appropriate arguments
+who_ns <- WHO_generator(who_gfp,foci_countries)
+who_ns
+IHME_ns <- ICL_IHME_Wrapper(who_gfp,pop_gfp,ihme_gfp,"IHME",foci_countries)
+IHME_ns
+ICL_ns <- ICL_IHME_Wrapper(who_gfp,pop_gfp,icl_gfp,"ICL",foci_countries)
+ICL_ns
+
+```
+
+# Section 2
+
+I chose 5 countries from each of the regions. Our group made a google sheets in order to make sure we had as little overlap as possible. We wanted to ensure that our plots represented as many countries as possible. The specific countries I chose were a little random. I just looked through the list of countries in each region and chose 5 that I thought would be interesting to learn more about.
+
+1.	 It was really interesting to compare the number of reported deaths/cases to the number of infections per 1000 people. The proportions between the bars in the plot significantly shifted between these two plots. This can be partially attributed to the different axes’ scales for each plot.
+
+2.	Comoros has a significant uncertainty for all three plots. For most of the countries, they only have one plot at most with significant uncertainty.
+
+3.	Most of the countries in the WPRO region seem to be essentially unaffected by COVID, but I think this is likely just due to a lack of reporting and testing availability.
+
+4.	Grenada and the Dominica also have very low reports for each graph, but I am unsure if this is an accurate representation of how those countries are doing or just lack of good reporting and frequent testing.
+
+```{r}
+#foci by WHO region
+afro_foci <- c('Comoros', 'Congo','Eritrea','Nigeria','Gabon')
+amro_foci <- c('Costa Rica', 'Cuba','Dominica','Ecuador','Grenada')
+emro_foci <- c('Morocco','Oman','Pakistan','Qatar','Somalia')
+euro_foci <- c('Cyprus','Czechia','Denmark','Estonia','Finland')
+searo_foci <- c('Maldives','India','Bangladesh','Indonesia','Thailand')
+wpro_foci <- c('Mongolia','Nauru','Niue','Philippines','Palau')
+
+#concatenate all foci together---easier debugging
+foci_countries <- c(afro_foci,amro_foci,euro_foci,emro_foci,searo_foci,wpro_foci)
+
+#call each of the functions with appropriate arguments
+who_jv <- WHO_generator(who_gfp,foci_countries)
+who_jv
+IHME_jv <- ICL_IHME_Wrapper(who_gfp,pop_gfp,ihme_gfp,"IHME",foci_countries)
+IHME_jv
+ICL_jv <- ICL_IHME_Wrapper(who_gfp,pop_gfp,icl_gfp,"ICL",foci_countries)
+ICL_jv
+
+```
+
+# Section 3
+
+Some observations regarding the box plots:
+
+1. China reports a low number of cases per 1000 people, but because the Chinese population is so large, this leads to a greater number of cases reported overall and therefore a greater number of deaths reported, leading to a higher fatality rate.
+
+2. In contrast, even though India has a large population as well (albeit smaller than China’s), it reports a somewhat lower fatality rate than China; yet, the number of infections per 1000 people is higher in India than in China. This may indicate differences in reporting cases in the first place, since India may report more cases than China in the first place. As with many countries, not just these two, there are different definitions concerning fatalities from COVID-19, as an infection may not be a person’s primary cause of death, yet said person is still categorized as a COVID-19 fatality. Furthermore, some countries may underreport the total number of cases, but once a case is reported, it may prove more difficult to underreport the number of deaths. As such, cases that are not recorded do not factor into the fatality rate, leading not only to a lower infection rate but, conversely, a higher fatality rate.
+
+3. In future analyses, it may be useful to compare countries in a different way than by world region (e.g. do not facet on the six WHO regions) because certain countries in a given region may have suffered outsized impacts from the pandemic compared to other countries in the region (and also have very different population sizes and dynamics to begin with), obscuring the finer points of smaller countries who may have suffered a relatively high number of deaths relative to their overall population. For example, when including India in the same region (SEARO) as Thailand, it is difficult to assess the number of cases Thailand reported per 1000 people. (Not only is Thailand much smaller than India, but it also has reported fewer cases comparatively to India, but these graphs only show relative differences due to various x axis scales.)
+
+
+```{r}
+#foci by WHO region
+afro_foci <- c('Algeria', 'Angola','Benin','Botswana','Burkina Faso')
+amro_foci <- c('Argentina', 'Belize','Bolivia','Brazil','Chile')
+emro_foci <- c('Djibouti','Egypt','Iran','Saudi Arabia','Yemen')
+euro_foci <- c('Andorra','Austria','Belgium','Croatia','Czech Republic')
+searo_foci <- c('Bangladesh','Bhutan','India','Indonesia','Thailand')
+wpro_foci <- c('Brunei','Cambodia','China','New Zealand','Tuvalu')
+
+#concatenate all foci together---easier debugging
+foci_countries <- c(afro_foci,amro_foci,euro_foci,emro_foci,searo_foci,wpro_foci)
+
+#call each of the functions with appropriate arguments
+who_cw <- WHO_generator(who_gfp,foci_countries)
+who_cw
+IHME_cw <- ICL_IHME_Wrapper(who_gfp,pop_gfp,ihme_gfp,"IHME",foci_countries)
+IHME_cw
+ICL_cw <- ICL_IHME_Wrapper(who_gfp,pop_gfp,icl_gfp,"ICL",foci_countries)
+ICL_cw
+
+```
+
+# Section 4
+
+I chose 5 countries for each region established by the WHO. 
+
+1. Looking at the boxplots comparing reported deaths / reported cases was very interesting because it gave a visual of how these rates differ between countries and among regions. According to these plots, it appear that the AMRO region had the highest rate of deaths per cases when compared to the selected countries in other regions.
+
+2. Something that was interesting is the uncertainty when it comes to infections per 1000 people in the second plot. The long error bars signal to me that there is not a clear answer when comes to reporting exact numbers of cases.
+
+3. Of the selected countries, the AFRO and WPRO regions appear to have to lowest number of infections per 1000 people (IHME estimates), whether this is due to low spread of infection or inaccurate reporting, which cannot be determined from the data.
+
+4. The ICL estimates of infections per 1000 people were similar to the IHME estimates, with high uncertainty, and lower rates in the AFRO and WPRO regions.
+
+```{r}
+#foci by WHO region
+afro_foci <- c('Burundi', 'Cameroon','Cabo Verde','Central African Republic','Chad')
+amro_foci <- c('Bolivia (Plurinational State of)', 'Brazil','Canada','Chile','Colombia')
+emro_foci <- c('Iraq','Jordan','Kuwait','Lebanon','Libya')
+euro_foci <- c('Belarus','Belgium','Bosnia and Herzegovina','Bulgaria','Croatia')
+searo_foci <- c('Maldives','Myanmar','Nepal','Sri Lanka','Thailand')
+wpro_foci <- c('Fiji','Japan','Kiribati','Lao People\'s Democratic Republic','Malaysia')
+
+#concatenate all foci together---easier debugging
+foci_countries <- c(afro_foci,amro_foci,euro_foci,emro_foci,searo_foci,wpro_foci)
+
+#call each of the functions with appropriate arguments
+who_lb <- WHO_generator(who_gfp,foci_countries)
+who_lb
+IHME_lb <- ICL_IHME_Wrapper(who_gfp,pop_gfp,ihme_gfp,"IHME",foci_countries)
+IHME_lb
+ICL_lb <- ICL_IHME_Wrapper(who_gfp,pop_gfp,icl_gfp,"ICL",foci_countries)
+ICL_lb
+```
+
+
+
+# References
+
+## One Offs
+1. (Functions in R) [https://www.tutorialspoint.com/r/r_functions.htm]
+
+## Data and Associated References
+1. (WHO) [https://covid19.who.int/info/]
+  * EMRO: Eastern Mediterranian region - https://www.who.int/about/regions/emro/en/
+  * EURO: European region - https://www.who.int/about/regions/euro/en/
+  * SEARO: South-East Asia region - https://www.who.int/about/regions/searo/en/
+  * WPRO: Western Pacific region - https://www.who.int/about/regions/wpro/en/
+  * https://www.who.int/quantifying_ehimpacts/global/ebdcountgroup/en/
+  * https://en.wikipedia.org/wiki/List_of_WHO_regions
+  * https://www.greenfacts.org/glossary/wxyz/who-regions.htm
+2. (OWID) [https://ourworldindata.org/covid-models]
+
+## Function-based Citations
+We refer the reader to the code generated by Professor Schwartz for possible citations on the routines implemented in the wrapper classes.
