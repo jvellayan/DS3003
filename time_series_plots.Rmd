@@ -1,0 +1,235 @@
+---
+title: "Time Series"
+author: "Cecily Wolfe, Jaya Vellayan, Libby Browder, Neil Singh" 
+date: "03/07/2020"
+output:
+     html_document:
+          toc: TRUE
+          toc_depth: 4
+          toc_float: true
+          toc_collapsed: true
+          theme: journal
+          code_folding: show
+---
+
+<!--- Change font size for headers --->
+<style>
+h1.title {
+  font-size: 30px;
+}
+h1 {
+  font-size: 26px;
+}
+h2 {
+  font-size: 22px;
+}
+h3 { 
+  font-size: 18px;
+}
+
+</style>
+
+
+```{r setup}
+library(tidyverse)
+library(reshape2)
+library(lubridate)
+```
+
+
+```{r stats_guys, warning=FALSE,message=FALSE}
+#https://dplyr.tidyverse.org/reference/across.html
+#https://stackoverflow.com/questions/47126197/how-to-transpose-t-in-the-tidyverse-using-tidyr
+
+#loads the "bayes_recon" dataset for plotting
+load("C:/Users/ns9wr/Documents/DS_Course/time-series/bayes_recon.R")
+path <-"C:/Users/ns9wr/Documents/DS_Course/time-series/"
+file <- "bayes_recon.R"
+#loads bayes_recon again, with a concenated path variable
+load(paste0(path,file,sep=''))
+#concatenates two variables loaded from bayes_recon
+all_idxD <- c(in_idxD, out_idxD)
+
+#creates/casts the tibble from the bayes_recond dataset
+plot_build_for_stats_guys_version <- t(yhat3) %>% as_tibble() %>% 
+  #performs quantile function on multiple variables
+  summarise_all(~ quantile(.x, probs=c(0.025,0.5,0.975))) %>%
+  #manipulates the rownames, reshaping into a ggplot friendly form (utilizes wide and long data forms)
+  rownames_to_column() %>% pivot_longer(-rowname, 'variable', 'value') %>%
+  pivot_wider(variable, rowname) %>% 
+  #renaming the variables from original numeric columns, selecting everything BUT variable
+  rename(lower=`1`, median=`2`, upper=`3`) %>% dplyr::select(-variable) %>%
+  #creating a year column, casting strings to numerics
+  add_column(year=as.numeric(all_idxD)) %>% 
+  ggplot() + 
+  #uses the interval for the uncertainties in data
+  geom_ribbon(aes(ymin=lower, ymax=upper, x=year, fill='Stats Guys Reconstruction'), 
+              alpha=0.5) + 
+  #plots the actual data observations
+  geom_path(aes(x=year,y=median), color="blue") +
+  #titles and labels the figures
+  theme(legend.position="bottom") + ylab("Temerature Anomaly (Celcius)") +
+  ggtitle("Pages 2K: degree C anomaly relative to 1961-1990...maybe different?")
+
+plot_build_for_stats_guys_version
+```
+
+
+```{r pages_2k,, warning=FALSE,message=FALSE}
+#initializes the file string
+file <- "Reconstruction_Arc2kv1.1.1.xlsx"
+#reads the XLSX formula, filtering for years after 998, and renaming columns to more user friendly forms (pred/lower/upper/year)
+pages_2k_data <- readxl::read_excel(paste0(file,sep='')) %>% 
+  filter(`Year AD`>=998) %>%
+  rename(pred=`Temperature (deg C anomaly wrt 1961-1990)...2`, 
+         lower=`2 sigma unc. low`, upper=`2 sigma unc. high`, year=`Year AD`)
+
+#utilizes the rollify function to create a "rolling mean"
+#install.packages('tibbletime')
+rolling_mean <- tibbletime::rollify(mean, window = 10)#10 years... good choice?
+
+plot_build_for_stats_guys_version + 
+  #applies the ribbon for the interval of uncertainty of the Pages 2k data
+  geom_ribbon(data=pages_2k_data, 
+              aes(x=year, ymin=lower, ymax=upper, 
+                  fill='Pages 2k Reconstruction'), alpha=0.5) +
+  #applies the path function to plot the rolling averages
+  geom_path(data = pages_2k_data %>% mutate(pred=rolling_mean(pred)), 
+            aes(x=year,y=pred), color="purple")
+```
+
+
+# Section 1: CHO Delays
+
+The data represents the delays at the Charlottesville Albemarle Airport for the year 2020. We divide the data by cause: Weather, Volume, Equipment, Closed Runway, or other causes. These all provide insights into the roles airlines can play in minimizing their delays they are liable for. An example being equipment-based issues, like engine or avionics system failures. A idiosyncracy of CHO airport is that the jets are largely regional jets, which are designed for smaller capacities at the risk of being more susceptible to overbooking-based situations, which causes delays. Volume delays were the highest, while runway closures were the lowest. This visualization can be used to inform operations research teams on scheuling, queuing, and fare algorithm devlopment. 
+
+```{r neil, warning=FALSE,message=FALSE}
+#reading the data 
+cho_delays <- read.csv("CHO_Delays_2020.csv")
+#reshapes data into a ggplot friendly format
+melt_df <- melt(cho_delays, id="Month")
+
+#initializes the ggplot handle with the variables
+ns_ts <- ggplot(melt_df,mapping=aes(x=Month,y=value,colour=variable,group=variable)) +  
+  #adds individual lines
+  geom_line() +
+  #creates the positioning of the legend and labels
+  theme(legend.position="bottom") + ylab("Amount of Delays") + xlab("Month") +
+  ggtitle("Delays By Cause: Charlottesville Albemarle Airport, 2020") 
+
+ns_ts
+```
+
+# Section 2: Melbourne
+
+I chose to create a timeseries plot of the minimum temperature in Melbourne over a 9-year time period. The dataset itself is very minimal. It simply has an entry for every day for 9 years straight with the minimum temperature for that day. I chose this dataset because I thought it would be interesting to try and see seasonal trends over the years, especially when taking global warming into consideration. The temperature and seasons seem pretty steady over the course of the graph. The entire graph seems to follow a short, repeating pattern. There is no obvious signs of global warming in this plot, but it is also decently old data.
+
+```{r, warning= FALSE}
+#load and read data
+path <- 'daily-minimum-temperatures-in-me.csv'
+temp_data <-read.csv(path)
+
+#convert temperature to a numeric instead of categorical value (need to set digits)
+options(digits=9)
+temp_data[,2] <- as.numeric(as.character(temp_data[,2]))
+
+#convert Date column to a date datatype
+temp_data[,1] <- ymd(temp_data[,1])
+
+#set up dataframe and create a grouping for plotting
+df <- temp_data %>%
+  select(Date, Daily.minimum.temperatures.in.Melbourne..Australia..1981.1990) %>%
+  gather(key="variable", value ="value", -Date)
+
+#plot the data as a timeseries plot
+ggplot(df, aes(x = Date, y = value, group = variable, color=variable)) + 
+  geom_line() +
+  theme(legend.position="bottom") +
+  xlab("Year") +
+  ylab("Minimum Temperature in Melbourne") +
+  ggtitle("Minimum Temperature in Melbourne From 1981- 1990")
+```
+
+# Section 3: Life Expectancy, Afghanistan
+
+
+This time series plot displays life expectancy in Afghanistan between the 1950 and 2017. This data comes from a subset of the data on life expectancy by country provided by Our World in Data. I was interested to see if life expectancy grew rapidly in Afghanistan over a time period that included the introduction of the polio vaccine (which premiered in the United States in the 1950s), organized vaccination campaigns in Afghanistan, and the subsequent decrease in cases from 2013-2016. (However, starting in 2017, polio cases increased, although they remained in the tens, meaning they did not have an appreciable effect on the country's life expectancy as a whole.) The graph displays a largely linear trend, with life expectancy steadily increasing during a time where medical innovation abounded.
+Yet, a peak life expectancy in 2017 of approximately 65 years still lags behind countries such as the United States, the United Kingdom, and Japan, which routinely report life expectancy measurements in the high 70s and low 80s. It will be interesting in further analyses, though, to examine the impacts of the COVID-19 pandemic on national life expectancy measurements in places such as the United States, an industrialized country with a high death rate, and smaller countries such as Afghanistan with relatively lower death rates.
+
+
+```{r}
+# read in the data
+life_expectancy <- read.csv("life-expectancy.csv")
+
+# create a ggplot and limit the data set to the first 70 rows (which contain the data for Afghanistan)
+# plot year vs. life expectancy in years
+ggplot_life_expectancy <- ggplot(data=sample(life_expectancy[1:70,]), mapping=aes(x=Year, y=Life.expectancy, group=1))
+# create both a line plot and display the individual data points
+ggplot_life_expectancy <- ggplot_life_expectancy + geom_line() + geom_point(color="blue")
+
+# add x-axis and y-axis labels
+ggplot_life_expectancy <- ggplot_life_expectancy + xlab("Year") + ylab("Life Expectancy (Years)")
+
+# scale the x-axis and y-axis 
+ggplot_life_expectancy <- ggplot_life_expectancy +
+  scale_x_continuous(name="Year", breaks=seq(1950,2015,5)) +
+  scale_y_continuous(name="Life Expectancy (Years)", breaks=seq(0,70,5))
+
+# add a title to the graph
+ggplot_life_expectancy <- ggplot_life_expectancy + labs(title = "Life Expectancy Over Time in Afghanistan 1950-2017")
+
+# display the graph 
+ggplot_life_expectancy
+```
+
+#Section 4: Perth Precipitation
+
+I chose a data set that has the minimum and maximum temperature and rainfall for Perth, Australia from 1944 to 2020. Because the data set has separate columns for year, month, and day, I chose to look at the rainfall in a single month in Perth. From the plot, it looks like Perth had about 10 days out of the month of June 1944 with moderate rainfall. When compared to December 1944 which did not have much rainfall, it seems like the summer climate in Perth sees more precipitation than the winter.
+
+# Section 4: Perth Rainfall
+```{r libby, warning = FALSE, message = FALSE}
+# read perth weather dataset
+pt <- read.csv("PerthTemperatures.csv") 
+
+#create new data with only 1944 values
+pt <- pt[pt$Year == 1944,]
+
+#create new data with only June values
+pt <- pt[pt$Month == 6,]
+
+#create plot that looks at rainfall over the month of June 1944
+lb_ts <- pt %>% 
+  ggplot(aes(x=`Day`, y= `Rainfall.amount..millimetres.`))+
+  geom_path()+
+  theme(legend.position= "bottom") + ylab("Rainfall (in Millimetres)")+
+  ggtitle("Perth Rainfall, June, 1944")
+
+lb_ts
+
+```
+
+
+
+# Citations
+
+1. [geom_path] (https://ggplot2.tidyverse.org/reference/geom_path.html)
+2. [TS] (https://www.r-graph-gallery.com/279-plotting-time-series-with-ggplot2.html)
+3. [aes Errors] (https://stackoverflow.com/questions/51234843/error-mapping-should-be-created-with-aes-or-aes)
+4. [aes Dimension Errors] (https://community.rstudio.com/t/error-aesthetics-must-be-either-length-1-or-the-same-as-the-data-2-fill/15579/2)
+5. [ggplot with multiple columns] (https://stackoverflow.com/questions/13324004/plotting-multiple-time-series-in-ggplot)
+6. [Dealing With Dates] (https://bookdown.org/rdpeng/RProgDA/working-with-dates-times-time-zones.html)
+7. [Subsetting] (https://stackoverflow.com/questions/7381455/filtering-a-data-frame-by-values-in-a-column)
+8. [TS General Resources] (http://www.sthda.com/english/articles/32-r-graphics-essentials/128-plot-time-series-data-using-ggplot/)
+9. [Axis Ticks] (https://stackoverflow.com/questions/11335836/increase-number-of-axis-ticks)
+10. [Scaling continuous axes] (http://www.sthda.com/english/wiki/ggplot2-axis-ticks-a-guide-to-customize-tick-marks-and-labels)
+11. [Basics of line plots] (http://www.sthda.com/english/wiki/ggplot2-line-plot-quick-start-guide-r-software-and-data-visualization)
+12. [Splitting data into smaller chunks by row] (https://stackoverflow.com/questions/35941482/how-can-i-split-a-csv-file-into-small-chunks)
+13. [Data analysis background information: Life Expectancy] (https://www.cdc.gov/mmwr/volumes/69/wr/mm6940a3.htm)
+14. [Debugging as.numeric] (https://stackoverflow.com/questions/29880210/as-numeric-removes-decimal-places-in-r-how-to-change)
+15. [R Documentation] (? Symbol in RStudio)
+
+# Data Sources 
+1. [CHO Data] (https://www.transtats.bts.gov/OT_Delay/OT_DelayCause1.asp)
+2. [Melbourne] (https://www.kaggle.com/paulbrabban/daily-minimum-temperatures-in-melbourne)
+3. [Life Expectancy]  (https://ourworldindata.org/life-expectancy#life-expectancy-increased-in-all-countries-of-the-world)
+4. [Perth] (https://www.kaggle.com/taranmarley/perth-temperatures-and-rainfall)

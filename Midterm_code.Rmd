@@ -1,0 +1,209 @@
+---
+title: "Midterm Code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+#load libraries
+#install.packages("wordcloud")
+#install.packages("syuzhet")
+#install.packages("tm", dependencies=TRUE)
+library(twitteR)
+library("tm")
+library("wordcloud")
+library(syuzhet)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(readr)
+```
+
+```{r}
+#load datasets
+country_vaccinations <- read_csv("Downloads/country_vaccinations.csv")
+covid_tweets <- read_csv("Downloads/covidvaccine.csv")
+#View(country_vaccinations)
+#View(covid_tweets)
+```
+
+```{r}
+#get rid of null
+country_vaccinations <-na.omit(country_vaccinations)
+covid_tweets <-na.omit(covid_tweets)
+```
+
+
+
+```{r}
+#view types
+str(covid_tweets)
+```
+
+# Data Cleaning 
+
+```{r}
+#cleaning 
+covid_tweets$date <- substr(covid_tweets$date, 1, 10)
+```
+
+
+```{r}
+#breaking into two datasets
+df1 <- covid_tweets%>% filter(str_detect(date, "2020"))
+df2 <- covid_tweets%>% filter(str_detect(date, "2021"))
+```
+
+```{r}
+#convert all text to lower case
+df1$text <- iconv(df1$text,"WINDOWS-1252","UTF-8")
+#df1$text <- str_replace_all(df1$text , "[^[:alnum:]]", " ")
+covid_tweets_text <- tolower(df1$text)
+
+# Replace blank space (ârtâ)
+covid_tweets_text <- gsub("rt", "", covid_tweets_text)
+# Replace @UserName
+covid_tweets_text <- gsub("@\\w+", "", covid_tweets_text)
+
+# Remove punctuation
+covid_tweets_text <- gsub("[[:punct:]]", "", covid_tweets_text)
+
+# Remove links
+covid_tweets_text <- gsub("http\\w+", "", covid_tweets_text)
+
+
+# Remove tabs
+covid_tweets_text <- gsub("[ |\t]{2,}", "", covid_tweets_text)
+
+# Remove blank spaces at the beginning
+covid_tweets_text <- gsub("^ ", "", covid_tweets_text)
+
+
+# Remove blank spaces at the end
+covid_tweets_text <- gsub(" $", "", covid_tweets_text)
+```
+
+```{r}
+#convert all text to lower case
+df2$text <- iconv(df2$text,"WINDOWS-1252","UTF-8")
+covid_tweets_text1 <- tolower(df2$text)
+
+
+# Replace blank space (ârtâ)
+covid_tweets_text1 <- gsub("rt", "", covid_tweets_text1)
+# Replace @UserName
+covid_tweets_text1 <- gsub("@\\w+", "", covid_tweets_text1)
+
+# Remove punctuation
+covid_tweets_text1 <- gsub("[[:punct:]]", "", covid_tweets_text1)
+
+# Remove links
+covid_tweets_text1 <- gsub("http\\w+", "", covid_tweets_text1)
+
+
+# Remove tabs
+covid_tweets_text1 <- gsub("[ |\t]{2,}", "", covid_tweets_text1)
+
+# Remove blank spaces at the beginning
+covid_tweets_text1 <- gsub("^ ", "", covid_tweets_text1)
+
+
+# Remove blank spaces at the end
+covid_tweets_text1 <- gsub(" $", "", covid_tweets_text1)
+```
+
+# Stop word handling
+
+```{r}
+#corpus build - remove stop words
+covid_tweets_text_corpus <- Corpus(VectorSource(covid_tweets_text))
+covid_tweets_text_corpus <- tm_map(covid_tweets_text_corpus, function(x)removeWords(x,stopwords()))
+```
+
+```{r}
+#corpus build - remove stop words
+covid_tweets_text_corpus1 <- Corpus(VectorSource(covid_tweets_text1))
+covid_tweets_text_corpus1 <- tm_map(covid_tweets_text_corpus1, function(x)removeWords(x,stopwords()))
+```
+
+# Word Cloud
+
+```{r}
+#df1
+wordcloud(covid_tweets_text_corpus,min.freq = 300,colors=brewer.pal(8, "Dark2"),random.color = TRUE,max.words = 15000)
+```
+```{r}
+#df1
+wordcloud(covid_tweets_text_corpus,min.freq = 200,colors=brewer.pal(8, "Dark2"),random.color = TRUE,max.words = 15000)
+```
+
+```{r}
+#df2
+wordcloud(covid_tweets_text_corpus1,min.freq = 300,colors=brewer.pal(8, "Dark2"),random.color = TRUE,max.words = 15000)
+```
+```{r}
+#df2
+wordcloud(covid_tweets_text_corpus1,min.freq = 400,colors=brewer.pal(8, "Dark2"),random.color = TRUE,max.words = 15000)
+```
+
+# Sentiment Analysis
+```{r}
+#sentiment analysis
+#df1
+#takes a long time to run, only re run if needed
+#covid_tweets_text_sent<-get_nrc_sentiment((covid_tweets_text))
+
+#calculationg total score for each sentiment
+covid_tweets_text_sent_score<-data.frame(colSums(covid_tweets_text_sent[,]))
+
+names(covid_tweets_text_sent_score)<-"Score"
+covid_tweets_text_sent_score<-cbind("sentiment"=rownames(covid_tweets_text_sent_score), covid_tweets_text_sent_score)
+rownames(covid_tweets_text_sent_score)<-NULL
+
+
+#plotting the sentiments with scores
+ggplot(data=covid_tweets_text_sent_score,aes(x=sentiment,y=Score))+geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("Scores")+ggtitle("Sentiments of COVID-19 vaccince tweets in 2020") + 
+  ylim(0,60000) +
+  theme_light()
+```
+
+```{r}
+#sentiment analysis
+#df2
+#takes a long time to run
+#covid_tweets_text_sent1<-get_nrc_sentiment((covid_tweets_text1))
+
+#calculationg total score for each sentiment
+covid_tweets_text_sent_score1<-data.frame(colSums(covid_tweets_text_sent1[,]))
+
+names(covid_tweets_text_sent_score1)<-"Score"
+covid_tweets_text_sent_score1<-cbind("sentiment"=rownames(covid_tweets_text_sent_score1), covid_tweets_text_sent_score1)
+rownames(covid_tweets_text_sent_score1)<-NULL
+
+
+#plotting the sentiments with scores
+ggplot(data=covid_tweets_text_sent_score1,aes(x=sentiment,y=Score))+geom_bar(aes(fill=sentiment),stat = "identity")+
+  theme(legend.position="none")+
+  xlab("Sentiments")+ylab("Scores")+ggtitle("Sentiments of COVID-19 vaccince  tweets in 2021 ") + ylim(0,60000) +
+  theme_light()
+```
+s
+
+
+
+## resources
+https://stackoverflow.com/questions/7755240/list-distinct-values-in-a-vector-in-r
+https://www.kaggle.com/kaushiksuresh147/covidvaccine-tweets
+https://www.kaggle.com/gpreda/covid-world-vaccination-progress
+https://sebastiansauer.github.io/dplyr_filter/
+https://www.kaggle.com/pulkit21aug/sentiment-analysis-covid-vaccine-twitter-emotion
